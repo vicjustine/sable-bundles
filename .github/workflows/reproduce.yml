@@ -1,0 +1,85 @@
+name: Prove catalog reproducibility
+run-name: Catalog comparison / ${{ inputs.mode || 'stable' }}
+
+on:
+  push:
+    paths:
+      - '.github/workflows/reproduce.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Second build metadata
+        type: choice
+        options: [stable, drift]
+        default: stable
+
+permissions:
+  contents: read
+
+jobs:
+  left:
+    name: Build left snapshot 
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack left
+        run: python3 scripts/pack.py data/left.csv out/catalog.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: left-bundle
+          path: out/catalog.zip
+          if-no-files-found: error
+          retention-days: 7
+  right:
+    name: Build right snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack right
+        env:
+          MODE: ${{ inputs.mode}}
+        run: |
+          flags=()
+          if [[  "$MODE"  == drift  ]]; then
+            flags+=(--drift)
+          fi
+          python3 scripts/pack.py data/right.csv out/catalog.zip "${flags[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: right-bundle
+          path: out/catalog.zip
+          if-no-files-found: error
+          retention-days: 7
+ 
+  compare:
+    name: Verify and promote
+    needs: [left, right]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: left-bundle
+          path: left
+      - uses: actions/download-artifact@v4
+        with:
+            name: right-bundle
+            path: right
+      - name: Compare ZIP bytes
+        run: python3 scripts/compare.py
+      - name: Preserve comparison evidence
+        if: ${{ success() || failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-evidence
+          path: comparison.md
+          if-no-files-found: error
+          retention-days: 7
+      - name: Promote verified ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-catalog
+          path: left/catalog.zip
+          if-no-files-found: error
+          retention-days: 7
+          
